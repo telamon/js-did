@@ -2,6 +2,8 @@ import React from 'react'
 import { useStore } from '@nanostores/react'
 import { $account } from './account'
 import { RainbowProvider, WithEthereumCacao } from './ethereum'
+import { WithWebauthnCacao } from './webauthn'
+
 // import { WithTezos } from './tezos'
 
 function SignIn() {
@@ -14,6 +16,9 @@ function SignIn() {
         {/*</li>*/}
         <li>
           <WithEthereumCacao />
+        </li>
+        <li>
+          <WithWebauthnCacao />
         </li>
         {/*<li>*/}
         {/*  <WithTezos />*/}
