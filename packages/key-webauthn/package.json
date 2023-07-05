@@ -23,6 +23,7 @@
     "build": "pnpm run build:clean && pnpm run build:types && pnpm run build:js",
     "lint": "eslint src --fix",
     "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
+    "debug": "node inspect --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
     "test:ci": "pnpm run test --ci --coverage",
     "prepare": "pnpm run build",
     "prepublishOnly": "package-check",
@@ -49,6 +50,7 @@
   "dependencies": {
     "@didtools/cacao": "workspace:^2.1.0",
     "@stablelib/random": "^1.0.2",
+    "cborg": "1.10.2",
     "caip": "^1.1.0",
     "uint8arrays": "^4.0.3"
   }
