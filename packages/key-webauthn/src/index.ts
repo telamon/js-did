@@ -68,9 +68,11 @@ function randomBytes (n: number) {
  * @param {Uint8Array|ArrayBuffer} attestationObject As given by credentials.create().response.attestationObject
  */
 export function decodeAuthenticatorData (attestationObject: Uint8Array|ArrayBuffer) {
+  // TODO: AttestationObject is not same as authData; AObject is a CBOR containing a copy of AuthData
   if (attestationObject instanceof ArrayBuffer) attestationObject = new Uint8Array(attestationObject)
   if (!(attestationObject instanceof Uint8Array)) throw new Error('Uint8ArrayExpected')
   const { authData } = decode(attestationObject)
+
   // https://w3c.github.io/webauthn/#sctn-authenticator-data
   if (authData.length < 37) throw new Error('AuthenticatorDataTooShort')
   let o = 0

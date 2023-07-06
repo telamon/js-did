@@ -43,16 +43,18 @@ describe('WebAuthn', () => {
 
 
   test('Verify', () => {
-    // create
+    // Create Response
     // const kid = 'uL55YZaNagzepg8iz4URraORix3tPNT8m5yQZjwP1DqY_b4Q5lCdVGrhli3vrnnn'
-    // const derpk = '3059301306072a8648ce3d020106082a8648ce3d03010703420004b8be7961968d6a0cdea60f22cfa915f5de34fab1847d1c2b2e0814b3e1fa15d6fcbf3b689071e6a42e02bc5f0f82da28eec7cf1bae7c69f9dde03dc5aeda366e'
+    // kid:hex: 'b8be7961968d6a0cdea60f22cf8511ada3918b1ded3cd4fc9b9c90663c0fd43a98fdbe10e6509d546ae1962defae79e7'
+
     const attestationObject = 'a363666d74646e6f6e656761747453746d74a068617574684461746158c249960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d9763c500000003000000000000000000000000000000000030b8be7961968d6a0cdea60f22cf8511ada3918b1ded3cd4fc9b9c90663c0fd43a98fdbe10e6509d546ae1962defae79e7a5010203262001215820b8be7961968d6a0cdea60f22cfa915f5de34fab1847d1c2b2e0814b3e1fa15d6225820fcbf3b689071e6a42e02bc5f0f82da28eec7cf1bae7c69f9dde03dc5aeda366ea16b6372656450726f7465637402'
     const authData = '49960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d9763c500000003000000000000000000000000000000000030b8be7961968d6a0cdea60f22cf8511ada3918b1ded3cd4fc9b9c90663c0fd43a98fdbe10e6509d546ae1962defae79e7a5010203262001215820b8be7961968d6a0cdea60f22cfa915f5de34fab1847d1c2b2e0814b3e1fa15d6225820fcbf3b689071e6a42e02bc5f0f82da28eec7cf1bae7c69f9dde03dc5aeda366ea16b6372656450726f7465637402'
     const { publicKey } = decodeAuthenticatorData(hexToBytes(attestationObject))
-    // sign
-    const hash = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f' // Dummy
+    // Sign Response
+    // const hash = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f' // Input
     const authData2 = '49960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d97630500000005'
     const sig = '3044022006b2c838abf114f97e3e57d0d2d0124d1e3f8089d707294bde2fa60c8ae0650002204723780cdd0c405147975aed229e84b7e4d47a8bb8aaa07407b1f842ba16fae1'
+    // TODO: rebuild from object?
     const clientDataJSON = '7b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a2241414543417751464267634943516f4c4441304f4478415245684d554652595847426b6147787764486838222c226f726967696e223a22687474703a2f2f6c6f63616c686f73743a38303030222c2263726f73734f726967696e223a66616c73657d'
 
     // expect(Buffer.from(JSON.parse(Buffer.from(hexToBytes(clientDataJSON)).toString()).challenge, 'base64url').hexSlice()).toEqual(hash)
@@ -64,18 +66,3 @@ describe('WebAuthn', () => {
     expect(valid).toEqual(true)
   })
 })
-
-/**
- * JWK formating
- {
-  "kty": "EC",
-  "crv": "P-256",
-  "x": "snwULF9MthD3FbAwNNIL5gCeYNjJYDH8cmeDh9sqp44",
-  "y": "Ueyp0xBLWjoVgF6CCPUjSbEWMJQ_7k7m_l_iEHLKnB4"
- }
-https://8gwifi.org/jwkconvertfunctions.jsp
------BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsnwULF9MthD3FbAwNNIL5gCeYNjJ
-YDH8cmeDh9sqp45R7KnTEEtaOhWAXoII9SNJsRYwlD/uTub+X+IQcsqcHg==
------END PUBLIC KEY-----
-*/
