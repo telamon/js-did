@@ -1,11 +1,16 @@
 // import { Cacao, SiweMessage, AuthMethod, AuthMethodOpts } from '@didtools/cacao'
-import { alloc } from 'uint8arrays/alloc'
 import { decode } from 'cborg'
+import { bytesToHex as toHex, bytesToNumberBE } from '@noble/curves/abstract/utils'
+// import * as u8a from 'uint8arrays'
+import { p256 } from '@noble/curves/p256'
+import { ecPointCompress, encodeDIDFromPub } from '@didtools/key-webcrypto'
+
+
 // Webauthn requires a browser.
 const { credentials } = globalThis.navigator
 const { crypto } = globalThis
 
-type WebauthnCreateOpts = {
+type WebauthnCreateOpts = { // TODO: remove this interface
   // Relaying party configuration (Consuming WebApp)
   rpid: PublicKeyCredentialCreationOptions['rp']['id'], // SecureContext Name
   rpname: PublicKeyCredentialCreationOptions['rp']['name'],
@@ -26,10 +31,10 @@ export async function createAccount (opts?: WebauthnCreateOpts) {
 
   const config: CredentialCreationOptions = {
     publicKey: {
-      challenge: randomBytes(32),
+      challenge: randomBytes(32), // Otherwise issued by server
       rp: { id: opts.rpid, name: opts.rpname },
       user: {
-        id: randomBytes(32),
+        id: randomBytes(32), // Otherwise issued by server
         name: opts.name,
         displayName: opts.displayName,
       },
@@ -45,38 +50,27 @@ export async function createAccount (opts?: WebauthnCreateOpts) {
   }
   const cred = await credentials.create(config) as any
   if (!cred) throw new Error('AbortedByUser')
-    const pk = cred.response.getPublicKey() // only on chrome
-  const ato = cred.response.attestationObject
-  console.log(pk, toHex(pk))
-  console.log(ato, toHex(ato))
-  debugger
-  console.log('credentials.create()', opts, config, cred, pk)
-  return `did:key:`
+
+  // cred.response.getPublicKey() // Returns binary DER-PK; Only available on Chrome
+  const { publicKey } = decodeAuthenticatorData(cred.response.attestationObject)
+  return encodeDIDFromPub(publicKey)
 }
 
 // --- Helpers
 function randomBytes (n: number) {
-  const b = alloc(n)
+  const b = new Uint8Array(n)
   crypto.getRandomValues(b)
   return b
 }
 
-export function toHex (arr: any) {
-  if (arr instanceof ArrayBuffer) arr = new Uint8Array(arr)
-    const lut = Array.from(new Array(256)).map((_, i) => i.toString(16).padStart(2, '0'))
-  let buf = ''
-  for (let i = 0; i < arr.length; i++) buf += lut[arr[i]]
-  return buf
-}
-
 /**
- * Extracts PublicKey from AuthenticatorData.
+ * Extracts PublicKey from AuthenticatorData as received from hardware key.
  *
  * See box `CREDENTIAL PUBLIC KEY` in picture:
  * https://w3c.github.io/webauthn/images/fido-attestation-structures.svg
  * @param {Uint8Array|ArrayBuffer} attestationObject As given by credentials.create().response.attestationObject
  */
-export function decodeAuthData (attestationObject: Uint8Array|ArrayBuffer) {
+export function decodeAuthenticatorData (attestationObject: Uint8Array|ArrayBuffer) {
   if (attestationObject instanceof ArrayBuffer) attestationObject = new Uint8Array(attestationObject)
   if (!(attestationObject instanceof Uint8Array)) throw new Error('Uint8ArrayExpected')
   const { authData } = decode(attestationObject)
@@ -87,7 +81,7 @@ export function decodeAuthData (attestationObject: Uint8Array|ArrayBuffer) {
 
   const flags = authData[o++]
   // console.debug(`Flags: 0b` + flags.toString(2).padStart(8, '0'))
-  if (!(flags & (1 << 6))) throw new Error('AuthenticatorDataHasNoKey')
+  if (!(flags & (1 << 6))) throw new Error('AuthenticatorData has no Key')
 
   const view = new DataView(authData.buffer)
   const signCounter = view.getUint32(o); o += 4
@@ -99,25 +93,41 @@ export function decodeAuthData (attestationObject: Uint8Array|ArrayBuffer) {
 
   // https://datatracker.ietf.org/doc/html/rfc9052#section-7
   // const publicKey = decode(authData.slice(o)) // cborg.decode fails; Refuses to decode COSE use of numerical keys
-  const cose = decodeCBOR(authData.slice(o)) // Decode cbor manually
-  if (cose[3] !== -7) throw new Error('Expected ES256 Algorithm')
+  const cose = decodeCBORHack(authData.slice(o)) // Decode cbor manually
 
+  // Section 'COSE Key Type Parameters'
+  // https://www.iana.org/assignments/cose/cose.xhtml
+  if (cose[1] !== 2) throw new Error('Expected EC Coordinate pair')
+  if (cose[3] !== -7) throw new Error('Expected ES256 Algorithm')
+  const x = cose[-2]
+  const y = cose[-3]
+  if (!(x instanceof Uint8Array) || !(y instanceof Uint8Array)) throw new Error('Expected X and Y coordinate to be buffers')
+
+  // Alg -7 equals ES256 equals NIST P-256 curve + SHA256: https://www.rfc-editor.org/rfc/rfc9053.html#section-2.1
+  const point = { x:  bytesToNumberBE(x), y: bytesToNumberBE(y) }
+  const publicKey = ecPointCompress(x, y)
+  toHex(publicKey2)
   debugger
+  const publicKey = p256.ProjectivePoint
+    .fromAffine(point)
+    .toRawBytes() // TODO: verify
   return {
     rpidHash,
     flags,
     signCounter,
     aaguid,
     credentialId,
-    // publicKey
+    publicKey,
     cose
   }
 }
 
 /**
- * Tiny unsafe CBOR decoder that only supports COSE_key decoding
+ * Tiny unsafe CBOR decoder that supports COSE_key numerical keys
+ * https://www.iana.org/assignments/cose/cose.xhtml
+ * Section 'COSE Key Type Parameters'
  */
-function decodeCBOR (buf: Uint8Array) {
+function decodeCBORHack (buf: Uint8Array) {
   if (!(buf instanceof Uint8Array)) throw new Error('Uint8ArrayExpected')
   const view = new DataView(buf.buffer)
   let o = 0
@@ -139,10 +149,23 @@ function decodeCBOR (buf: Uint8Array) {
     switch (b >> 5) {
       case 0: return l // Uint
       case 1: return -(l + 1) // Negative integer
-      case 2: return readBuffer(l)
+      case 2: return readBuffer(l) // binstr
       case 5: return readMap(l)
       default: throw new Error('UnsupportedType' + (b >> 5))
     }
   }
   return readItem()
 }
+
+/// TODO: Remove, identical to key-did-provider-webcrypto/index.ts:82
+/*
+export function encodeDIDFromPub(publicKey: Uint8Array): string {
+  const bytes = new Uint8Array(publicKey.length + 2)
+  // https://w3c-ccg.github.io/did-method-key/#p-256
+  // https://github.com/multiformats/multicodec/blob/master/table.csv
+  bytes[0] = 0x80 // varint value 0x1200
+  bytes[1] = 0x24
+  bytes.set(publicKey, 2)
+  return `did:key:z${u8a.toString(bytes, 'base58btc')}`
+}
+*/
