@@ -1,18 +1,38 @@
-import { parseAuthenticatorData, decodeAuthData } from '../src/index.ts'
-import { fromString } from 'uint8arrays/from-string'
+import { decodeAuthenticatorData } from '../src/index'
+import { hexToBytes } from '@noble/curves/abstract/utils'
+import { p256 } from '@noble/curves/p256'
+import * as u8a from 'uint8arrays'
+import { ecPointCompress } from '@didtools/key-webcrypto'
 describe('WebAuthn', () => {
-
-  test('Extract public key from AuthenticatorData', async () => {
-    // const chromeOutput = 'MjQ2LDEzNywyNDYsMTgzLDcyLDE0NSwxNTEsMTcwLDIwNywxLDIzLDQ3LDIsMTY4LDQ2LDcsMjEsMjQ3LDQyLDI1NSwxMTIsMjEzLDI0Nyw4OCwxODUsMTc2LDI0NywyMTEsMTUzLDE1MywxMjAsMjEwLDY5LDAsMCwwLDQsMCwwLDAsMCwwLDAsMCwwLDAsMCwwLDAsMCwwLDAsMCwwLDY0LDE3MSwzOSwxMDMsMjI2LDEwLDE0LDExMSw1MSwxMTUsMjgsMjQsNzMsMjEzLDY2LDQzLDM0LDE0OSwyMTQsODUsMjQwLDgxLDIxNiwxMzcsMTc2LDIyMCw2MiwxOTMsMTA4LDE2NiwxNDUsMzUsMjAsODksMTk4LDMxLDE5MSw1MiwxNTksMjEzLDI0Niw5NSwyMjYsMjcsODAsNDMsMjI3LDE4MSwxMjUsMTcxLDI0NCwxOTgsMTY0LDE3LDE5OCwyMywxMjAsMTEyLDEyLDU0LDE0NSwxNTAsMTA2LDEyMiwzNiwxNjUsMSwyLDMsMzgsMzIsMSwzMyw4OCwzMiwxNzgsMTI0LDIwLDQ0LDk1LDc2LDE4MiwxNiwyNDcsMjEsMTc2LDQ4LDUyLDIxMCwxMSwyMzAsMCwxNTgsOTYsMjE2LDIwMSw5Niw0OSwyNTIsMTE0LDEwMywxMzEsMTM1LDIxOSw0MiwxNjcsMTQyLDM0LDg4LDMyLDgxLDIzNiwxNjksMjExLDE2LDc1LDkwLDU4LDIxLDEyOCw5NCwxMzAsOCwyNDUsMzUsNzMsMTc3LDIyLDQ4LDE0OCw2MywyMzgsNzgsMjMwLDI1NCw5NSwyMjYsMTYsMTE0LDIwMiwxNTYsMzA='
-    const chromeOutput = 'MTYzLDk5LDEwMiwxMDksMTE2LDEwMCwxMTAsMTExLDExMCwxMDEsMTAzLDk3LDExNiwxMTYsODMsMTE2LDEwOSwxMTYsMTYwLDEwNCw5NywxMTcsMTE2LDEwNCw2OCw5NywxMTYsOTcsODgsMTk2LDI0NiwxMzcsMjQ2LDE4Myw3MiwxNDUsMTUxLDE3MCwyMDcsMSwyMyw0NywyLDE2OCw0Niw3LDIxLDI0Nyw0MiwyNTUsMTEyLDIxMywyNDcsODgsMTg1LDE3NiwyNDcsMjExLDE1MywxNTMsMTIwLDIxMCw2OSwwLDAsMCw0LDAsMCwwLDAsMCwwLDAsMCwwLDAsMCwwLDAsMCwwLDAsMCw2NCwxNzEsMzksMTAzLDIyNiwxMCwxNCwxMTEsNTEsMTE1LDI4LDI0LDczLDIxMyw2Niw0MywzNCwxNDksMjE0LDg1LDI0MCw4MSwyMTYsMTM3LDE3NiwyMjAsNjIsMTkzLDEwOCwxNjYsMTQ1LDM1LDIwLDg5LDE5OCwzMSwxOTEsNTIsMTU5LDIxMywyNDYsOTUsMjI2LDI3LDgwLDQzLDIyNywxODEsMTI1LDE3MSwyNDQsMTk4LDE2NCwxNywxOTgsMjMsMTIwLDExMiwxMiw1NCwxNDUsMTUwLDEwNiwxMjIsMzYsMTY1LDEsMiwzLDM4LDMyLDEsMzMsODgsMzIsMTc4LDEyNCwyMCw0NCw5NSw3NiwxODIsMTYsMjQ3LDIxLDE3Niw0OCw1MiwyMTAsMTEsMjMwLDAsMTU4LDk2LDIxNiwyMDEsOTYsNDksMjUyLDExNCwxMDMsMTMxLDEzNSwyMTksNDIsMTY3LDE0MiwzNCw4OCwzMiw4MSwyMzYsMTY5LDIxMSwxNiw3NSw5MCw1OCwyMSwxMjgsOTQsMTMwLDgsMjQ1LDM1LDczLDE3NywyMiw0OCwxNDgsNjMsMjM4LDc4LDIzMCwyNTQsOTUsMjI2LDE2LDExNCwyMDIsMTU2LDMw'
-    const mozOutput = 'MTYzLDk5LDEwMiwxMDksMTE2LDEwMCwxMTAsMTExLDExMCwxMDEsMTAzLDk3LDExNiwxMTYsODMsMTE2LDEwOSwxMTYsMTYwLDEwNCw5NywxMTcsMTE2LDEwNCw2OCw5NywxMTYsOTcsODgsMTk2LDI0NiwxMzcsMjQ2LDE4Myw3MiwxNDUsMTUxLDE3MCwyMDcsMSwyMyw0NywyLDE2OCw0Niw3LDIxLDI0Nyw0MiwyNTUsMTEyLDIxMywyNDcsODgsMTg1LDE3NiwyNDcsMjExLDE1MywxNTMsMTIwLDIxMCw2NSwwLDAsMCwwLDAsMCwwLDAsMCwwLDAsMCwwLDAsMCwwLDAsMCwwLDAsMCw2NCwyMiwxOTIsMjIyLDIxMCwyMTEsMTU1LDE3MiwyMjMsMTksNzUsMTQyLDI0NCwxMzcsOTgsMzMsMTgwLDE1MCwyMSw5NCw0OCwzMiwxMTYsNTcsMzQsMzMsNDAsMTUzLDIxOSwxMzQsMjcsODEsMjUwLDIzNiwxNjEsOSwyNDMsMjI3LDE0MSwxOSwyMDYsMTM5LDE5OCw3NSw2MSwxMjMsMTIsMjIyLDI0NSw0OCwxODYsMTI4LDEzMiwxMzEsNywxNDUsMTIwLDI4LDMwLDU4LDM5LDE1OSwxODMsMTI4LDQzLDE2NSwxLDIsMywzOCwzMiwxLDMzLDg4LDMyLDIyOSw3NSw0OCwxMDUsNzIsMjQsMjE4LDE4MCwyMDcsMjQzLDk5LDIxNCwxOCwxOTYsMjEwLDE0OCwxMTEsNjEsMjA1LDE4Niw4MiwyMzYsMTQ5LDIwLDg4LDMyLDQyLDEzNSwyMTQsMTA4LDE0NiwxNzcsMzQsODgsMzIsMjIwLDE3MywyNDksODUsMTQ1LDIwMywyMjUsMjUsMTk1LDE1OCwyNTMsNTIsNDUsMzcsMjE0LDc5LDIxLDkyLDEwNSwxNzksMjM2LDIyOCwxMTEsMTM1LDIzNywxMzMsMjM0LDIzNSwxOTEsMjAyLDE4MiwzMg=='
+  // Data extracted from testbench / console: https://heavy-mint.surge.sh/
+  test.skip('Extract public key from AuthenticatorData', () => {
+    /* chromium: toHex(window.createRes.response.getPublicKey()) */
+    // const cder = '3059301306072a8648ce3d020106082a8648ce3d03010703420004b27c142c5f4cb610f715b03034d20be6009e60d8c96031fc72678387db2aa78e51eca9d3104b5a3a15805e8208f52349b11630943fee4ee6fe5fe21072ca9c1e'
+    /* chromium: toHex(new Uint8Array(window.createRes.response.attestationObject)) */
     const chex = 'a363666d74646e6f6e656761747453746d74a068617574684461746158c4f689f6b7489197aacf01172f02a82e0715f72aff70d5f758b9b0f7d3999978d24500000004000000000000000000000000000000000040ab2767e20a0e6f33731c1849d5422b2295d655f051d889b0dc3ec16ca691231459c61fbf349fd5f65fe21b502be3b57dabf4c6a411c61778700c3691966a7a24a5010203262001215820b27c142c5f4cb610f715b03034d20be6009e60d8c96031fc72678387db2aa78e22582051eca9d3104b5a3a15805e8208f52349b11630943fee4ee6fe5fe21072ca9c1e'
-    const ad1 = fromString(chex, 'hex')
-    const res = decodeAuthData(ad1)
-    debugger
-    // const res = parseAuthenticatorData(ad1)
-    // const res2 = parseAuthData(fromString(mozOutput, 'base64url'))
-    console.log('TEST DECODE: ', res)
+    const atObj = hexToBytes(chex)
+    const { publicKey } = decodeAuthenticatorData(atObj)
+
+    // Key Extraction looks nice:
+    // toHex(publickKey)        02b27c142c5f4cb610f715b03034d20be6009e60d8c96031fc72678387db2aa78e
+    // Chrome provided DER:   0004b27c142c5f4cb610f715b03034d20be6009e60d8c96031fc72678387db2aa78e51eca9d3104b5a3a15805e8208f52349b11630943fee4ee6fe5fe21072ca9c1e
+
+
+    // Test verify
+    const mHash = 'b917827161ed5ed122c8ebf82a4dfdb8bfc9920a7567a6c19867d58957814872'
+    /* toHex(window.signRes.response.signature) */
+    const sig = '304402207325dbd6588b17c5bd8a95e604fcc9f9e9b1e83b9bf42836d9de856c9462c4300220649f0de166883da74cab8e65826da92dd9b312997ac4172c37d6797c9448d5a5'
+    /* toHex(window.signRes.response.authenticatorData) */
+    const authData = 'f689f6b7489197aacf01172f02a82e0715f72aff70d5f758b9b0f7d3999978d20500000017'
+
+    // const curveSig = p256.Signature.fromDER(sig)
+    // curveSig.assertValidity() // Should not throw
+
+    const msg = u8a.concat([hexToBytes(authData), hexToBytes(mHash)])
+    const  valid = p256.verify(sig, msg, publicKey, { prehash: true })
+    console.log('valid', valid)
+    // toHex(window.signRes.response.clientDataJSON)
+    // const clientDataJson = '7b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a22755265436357487458744569794f76344b6b3339754c5f4a6b6770315a3662426d47665669566542534849222c226f726967696e223a2268747470733a2f2f68656176792d6d696e742e73757267652e7368222c2263726f73734f726967696e223a66616c73652c226f746865725f6b6579735f63616e5f62655f61646465645f68657265223a22646f206e6f7420636f6d7061726520636c69656e74446174614a534f4e20616761696e737420612074656d706c6174652e205365652068747470733a2f2f676f6f2e676c2f796162506578227d'
   })
 
   test('Exports usable API', () => {
@@ -20,13 +40,42 @@ describe('WebAuthn', () => {
 
   test('Decode and verify Authenticator data', () => {
   })
-})
 
-/*
-describe('Ethereum PKH - Node Auth', () => {
-  test('throw error when no app name given', async () => {
-    const accountId = new AccountId("eip155:1:0xab16a96D359eC26a11e2C2b3d8f8B8942d5Bfcdb")
-    expect(() => EthereumNodeAuth.getAuthMethod({}, accountId, undefined)).rejects.toThrow("Node Auth method requires an application name")
+
+  test('Verify', () => {
+    // create
+    // const kid = 'uL55YZaNagzepg8iz4URraORix3tPNT8m5yQZjwP1DqY_b4Q5lCdVGrhli3vrnnn'
+    // const derpk = '3059301306072a8648ce3d020106082a8648ce3d03010703420004b8be7961968d6a0cdea60f22cfa915f5de34fab1847d1c2b2e0814b3e1fa15d6fcbf3b689071e6a42e02bc5f0f82da28eec7cf1bae7c69f9dde03dc5aeda366e'
+    const attestationObject = 'a363666d74646e6f6e656761747453746d74a068617574684461746158c249960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d9763c500000003000000000000000000000000000000000030b8be7961968d6a0cdea60f22cf8511ada3918b1ded3cd4fc9b9c90663c0fd43a98fdbe10e6509d546ae1962defae79e7a5010203262001215820b8be7961968d6a0cdea60f22cfa915f5de34fab1847d1c2b2e0814b3e1fa15d6225820fcbf3b689071e6a42e02bc5f0f82da28eec7cf1bae7c69f9dde03dc5aeda366ea16b6372656450726f7465637402'
+    const authData = '49960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d9763c500000003000000000000000000000000000000000030b8be7961968d6a0cdea60f22cf8511ada3918b1ded3cd4fc9b9c90663c0fd43a98fdbe10e6509d546ae1962defae79e7a5010203262001215820b8be7961968d6a0cdea60f22cfa915f5de34fab1847d1c2b2e0814b3e1fa15d6225820fcbf3b689071e6a42e02bc5f0f82da28eec7cf1bae7c69f9dde03dc5aeda366ea16b6372656450726f7465637402'
+    const { publicKey } = decodeAuthenticatorData(hexToBytes(attestationObject))
+    // sign
+    const hash = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f' // Dummy
+    const authData2 = '49960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d97630500000005'
+    const sig = '3044022006b2c838abf114f97e3e57d0d2d0124d1e3f8089d707294bde2fa60c8ae0650002204723780cdd0c405147975aed229e84b7e4d47a8bb8aaa07407b1f842ba16fae1'
+    const clientDataJSON = '7b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a2241414543417751464267634943516f4c4441304f4478415245684d554652595847426b6147787764486838222c226f726967696e223a22687474703a2f2f6c6f63616c686f73743a38303030222c2263726f73734f726967696e223a66616c73657d'
+
+    // expect(Buffer.from(JSON.parse(Buffer.from(hexToBytes(clientDataJSON)).toString()).challenge, 'base64url').hexSlice()).toEqual(hash)
+    // Verify
+    const clientDataHash = p256.CURVE.hash(hexToBytes(clientDataJSON))
+    const msg = u8a.concat([hexToBytes(authData2), clientDataHash])
+    const h2 = p256.CURVE.hash(msg)
+    const valid = p256.verify(sig, h2, publicKey)
+    expect(valid).toEqual(true)
   })
 })
+
+/**
+ * JWK formating
+ {
+  "kty": "EC",
+  "crv": "P-256",
+  "x": "snwULF9MthD3FbAwNNIL5gCeYNjJYDH8cmeDh9sqp44",
+  "y": "Ueyp0xBLWjoVgF6CCPUjSbEWMJQ_7k7m_l_iEHLKnB4"
+ }
+https://8gwifi.org/jwkconvertfunctions.jsp
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsnwULF9MthD3FbAwNNIL5gCeYNjJ
+YDH8cmeDh9sqp45R7KnTEEtaOhWAXoII9SNJsRYwlD/uTub+X+IQcsqcHg==
+-----END PUBLIC KEY-----
 */

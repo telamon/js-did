@@ -1,17 +1,14 @@
 // import { Cacao, SiweMessage, AuthMethod, AuthMethodOpts } from '@didtools/cacao'
 import { decode } from 'cborg'
-import { bytesToHex as toHex, bytesToNumberBE } from '@noble/curves/abstract/utils'
 // import * as u8a from 'uint8arrays'
-import { p256 } from '@noble/curves/p256'
 import { ecPointCompress, encodeDIDFromPub } from '@didtools/key-webcrypto'
-
 
 // Webauthn requires a browser.
 const { credentials } = globalThis.navigator
 const { crypto } = globalThis
 
 type WebauthnCreateOpts = { // TODO: remove this interface
-  // Relaying party configuration (Consuming WebApp)
+  // ID must equal hostname I believe.
   rpid: PublicKeyCredentialCreationOptions['rp']['id'], // SecureContext Name
   rpname: PublicKeyCredentialCreationOptions['rp']['name'],
 
@@ -102,15 +99,7 @@ export function decodeAuthenticatorData (attestationObject: Uint8Array|ArrayBuff
   const x = cose[-2]
   const y = cose[-3]
   if (!(x instanceof Uint8Array) || !(y instanceof Uint8Array)) throw new Error('Expected X and Y coordinate to be buffers')
-
-  // Alg -7 equals ES256 equals NIST P-256 curve + SHA256: https://www.rfc-editor.org/rfc/rfc9053.html#section-2.1
-  const point = { x:  bytesToNumberBE(x), y: bytesToNumberBE(y) }
   const publicKey = ecPointCompress(x, y)
-  toHex(publicKey2)
-  debugger
-  const publicKey = p256.ProjectivePoint
-    .fromAffine(point)
-    .toRawBytes() // TODO: verify
   return {
     rpidHash,
     flags,
@@ -156,16 +145,3 @@ function decodeCBORHack (buf: Uint8Array) {
   }
   return readItem()
 }
-
-/// TODO: Remove, identical to key-did-provider-webcrypto/index.ts:82
-/*
-export function encodeDIDFromPub(publicKey: Uint8Array): string {
-  const bytes = new Uint8Array(publicKey.length + 2)
-  // https://w3c-ccg.github.io/did-method-key/#p-256
-  // https://github.com/multiformats/multicodec/blob/master/table.csv
-  bytes[0] = 0x80 // varint value 0x1200
-  bytes[1] = 0x24
-  bytes.set(publicKey, 2)
-  return `did:key:z${u8a.toString(bytes, 'base58btc')}`
-}
-*/

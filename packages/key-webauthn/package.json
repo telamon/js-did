@@ -49,9 +49,10 @@
   },
   "dependencies": {
     "@didtools/cacao": "workspace:^2.1.0",
-    "@stablelib/random": "^1.0.2",
-    "cborg": "1.10.2",
+    "@didtools/key-webcrypto": "workspace:*",
+    "cborg": "^1.10.2",
     "caip": "^1.1.0",
-    "uint8arrays": "^4.0.3"
+    "uint8arrays": "^4.0.3",
+    "@noble/curves": "^1.1.0"
   }
 }
