@@ -8,6 +8,7 @@ import { SiweMessage } from './siwx/siwe.js'
 import { SiwsMessage } from './siwx/siws.js'
 import { SiwTezosMessage } from './siwx/siwTezos.js'
 import { SiwStacksMessage } from './siwx/siwStacks'
+import { sign } from 'crypto'
 
 // 5 minute default clockskew
 const CLOCK_SKEW_DEFAULT_SEC = 5 * 60
@@ -291,11 +292,15 @@ export namespace Cacao {
     return cacao
   }
 
+  export async function fromSiwWebauthn(): Promise<[hash: Uint8Array]> {
+  }
+
   export async function fromBlockBytes(bytes: Uint8Array): Promise<Cacao> {
     const block = await Block.decode({ bytes: bytes, codec: dagCbor, hasher: hasher })
     return block.value as Cacao
   }
 
+  // TODO: ensure webauthn provides custom verifier
   export async function verify(cacao: Cacao, opts: VerifyOptions = {}): Promise<void> {
     assertSigned(cacao)
     const verify = opts.verifiers[cacao.s.t]

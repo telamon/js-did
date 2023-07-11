@@ -482,6 +482,9 @@ importers:
       '@didtools/key-webcrypto':
         specifier: workspace:*
         version: link:../key-did-provider-webcrypto
+      '@ipld/dag-cbor':
+        specifier: ^9.0.1
+        version: 9.0.1
       '@noble/curves':
         specifier: ^1.1.0
         version: 1.1.0
@@ -491,6 +494,9 @@ importers:
       cborg:
         specifier: ^1.10.2
         version: 1.10.2
+      multiformats:
+        specifier: ^11.0.2
+        version: 11.0.2
       uint8arrays:
         specifier: ^4.0.3
         version: 4.0.3

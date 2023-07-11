@@ -1,39 +1,42 @@
-// import { Cacao, SiweMessage, AuthMethod, AuthMethodOpts } from '@didtools/cacao'
+import { Cacao, CacaoBlock } from '@didtools/cacao'
 import { decode } from 'cborg'
-// import * as u8a from 'uint8arrays'
+import { p256 } from '@noble/curves/p256'
+import * as u8a from 'uint8arrays'
 import { ecPointCompress, encodeDIDFromPub } from '@didtools/key-webcrypto'
+// Hashing workaround
+import * as dagCbor from '@ipld/dag-cbor'
+import * as Block from 'multiformats/block'
+import { sha256 as hasher } from 'multiformats/hashes/sha2'
+
+const RelayingPartyID = globalThis.location.hostname
+const RelayingPartyName = 'CeramicNetwork' // ???
 
 // Webauthn requires a browser.
 const { credentials } = globalThis.navigator
 const { crypto } = globalThis
 
 type WebauthnCreateOpts = { // TODO: remove this interface
-  // ID must equal hostname I believe.
-  rpid: PublicKeyCredentialCreationOptions['rp']['id'], // SecureContext Name
-  rpname: PublicKeyCredentialCreationOptions['rp']['name'],
+  // TODO: readup on use
+  rpname?: PublicKeyCredentialCreationOptions['rp']['name'],
 
   // User facing identifiers (Shown on device/selection screens)
   // This seems to be the string displayed on windows/chrome (windows-hello credential store)
-  name: PublicKeyCredentialCreationOptions['user']['name'],
-  displayName: PublicKeyCredentialCreationOptions['user']['displayName'] // shown in system popups
+  name?: PublicKeyCredentialCreationOptions['user']['name'],
+  displayName?: PublicKeyCredentialCreationOptions['user']['displayName'] // shown in system popups
 }
 
-export async function createAccount (opts?: WebauthnCreateOpts) {
-  opts = {
-    rpid: opts?.rpid ?? globalThis.location.hostname,
-    rpname: opts?.rpname ?? 'Webapp connected to CeramicNetwork',
-    name: opts?.name ?? 'ceramicuser',
-    displayName: opts?.displayName ?? 'Ceramic User'
-  }
-
+export async function createAccount (opts: WebauthnCreateOpts = {}) {
   const config: CredentialCreationOptions = {
     publicKey: {
       challenge: randomBytes(32), // Otherwise issued by server
-      rp: { id: opts.rpid, name: opts.rpname },
+      rp: {
+        id: RelayingPartyID, // Must be set to current hostname
+        name: RelayingPartyName
+      },
       user: {
         id: randomBytes(32), // Otherwise issued by server
-        name: opts.name,
-        displayName: opts.displayName,
+        name: opts.name || 'ceramicuser',
+        displayName: opts.displayName || 'Ceramic user',
       },
       pubKeyCredParams: [
         { type: 'public-key', alg: -7 }, // ECDSA with SHA-256
@@ -53,11 +56,104 @@ export async function createAccount (opts?: WebauthnCreateOpts) {
   return encodeDIDFromPub(publicKey)
 }
 
+export async function createCacaoChallenge () {
+    const now = Date.now()
+    // Workaround for unknown AAD and discoverable PK;
+    // we create a "challenge" CacaoBlock without Issuer attribute
+    const challenge: Cacao = Object.freeze({
+      h: {
+        t: 'caip122'
+      },
+      p: {
+        domain: globalThis.location.hostname,
+        iat: new Date(now).toISOString(),
+        aud: '' + globalThis.location,
+        version: 1,
+        nonce: globalThis.crypto.randomUUID(),
+        exp: new Date(now + 7 * 86400000).toISOString(), // 1 week
+        nbf: new Date(now).toISOString(),
+        resources: ['uri', 'uri'] // <-- resources we wish to grant permission to.
+      }
+    })
+
+    // Workaround for https://github.com/multiformats/js-multiformats/issues/259
+    const fromCacao = (cacao: Cacao): Promise<CacaoBlock> => {
+      return Block.encode<Cacao, number, number>({
+        value: cacao,
+        codec: dagCbor,
+        hasher: {
+          ...hasher,
+          digest (bytes: any) {
+            if (!(bytes instanceof Uint8Array) && bytes?.buffer) bytes = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+            return hasher.digest(bytes)
+          }
+        }
+      })
+    }
+    const block = await fromCacao(challenge) // await CacaoBlock.fromCacao(challenge)
+
+    // Webauthn Sign
+    // const signResponse = await webauthnSign(block.cid.bytes)
+
+    // Extend CacaoMessage with Authenticator values
+    const toCacao = (did: string, sig: Uint8Array, authenticatorData: Uint8Array):Cacao => ({
+      p: {
+        ...challenge.p,
+        iss: did
+      },
+      s: {
+        t: 'webauthn:es256',
+        s: sig,
+        aad: authenticatorData
+      }
+    })
+    return [block.cid.bytes, toCacao]
+}
+
+async function webauthnSign (hash: Uint8Array, requiredIdentity?: BufferSource) {
+  const allowCredentials = []
+  if (requiredIdentity) { // non-discoverable mode
+    allowCredentials.push({ type: "public-key", id: requiredIdentity })
+  }
+  const res = await globalThis.navigator.credentials.get({
+    publicKey: {
+      rpId: RelayingPartyID,
+      challenge: hash,
+      allowCredentials,
+      timeout: 240000,
+    },
+  })
+
+  res.response.authenticatorData
+  res.response.signature
+  debugger
+  return res
+}
+export type AdditionalAuthenticatorData = {
+  authData: Uint8Array,
+  clientDataJSON: Uint8Array
+}
+
+export function webauthnVerify (sig: Uint8Array, publicKey: Uint8Array, aad: AdditionalAuthenticatorData) {
+  const { authData, clientDataJSON } = aad
+  const clientDataHash = p256.CURVE.hash(clientDataJSON)
+  const msg = u8a.concat([authData, clientDataHash])
+  const hashBase = p256.CURVE.hash(msg)
+  return p256.verify(sig, hashBase, publicKey)
+}
+
 // --- Helpers
 function randomBytes (n: number) {
   const b = new Uint8Array(n)
   crypto.getRandomValues(b)
   return b
+}
+
+export function decodeAttestationObject (attestationObject: Uint8Array|ArrayBuffer) {
+  // TODO: AttestationObject is not same as authData; AObject is a CBOR containing a copy of AuthData
+  if (attestationObject instanceof ArrayBuffer) attestationObject = new Uint8Array(attestationObject)
+  if (!(attestationObject instanceof Uint8Array)) throw new Error('Uint8ArrayExpected')
+  return decode(attestationObject)
 }
 
 /**
@@ -67,12 +163,8 @@ function randomBytes (n: number) {
  * https://w3c.github.io/webauthn/images/fido-attestation-structures.svg
  * @param {Uint8Array|ArrayBuffer} attestationObject As given by credentials.create().response.attestationObject
  */
-export function decodeAuthenticatorData (attestationObject: Uint8Array|ArrayBuffer) {
-  // TODO: AttestationObject is not same as authData; AObject is a CBOR containing a copy of AuthData
-  if (attestationObject instanceof ArrayBuffer) attestationObject = new Uint8Array(attestationObject)
-  if (!(attestationObject instanceof Uint8Array)) throw new Error('Uint8ArrayExpected')
-  const { authData } = decode(attestationObject)
-
+export function decodeAuthenticatorData (authData: Uint8Array) {
+  if (!(authData instanceof Uint8Array)) throw new Error('Uint8ArrayExpected')
   // https://w3c.github.io/webauthn/#sctn-authenticator-data
   if (authData.length < 37) throw new Error('AuthenticatorDataTooShort')
   let o = 0
