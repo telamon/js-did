@@ -3,56 +3,63 @@ import { decode } from 'cborg'
 import { p256 } from '@noble/curves/p256'
 import * as u8a from 'uint8arrays'
 import { ecPointCompress, encodeDIDFromPub } from '@didtools/key-webcrypto'
+
 // Hashing workaround
 import * as dagCbor from '@ipld/dag-cbor'
 import * as Block from 'multiformats/block'
 import { sha256 as hasher } from 'multiformats/hashes/sha2'
-
-const RelayingPartyID = globalThis.location.hostname
-const RelayingPartyName = 'CeramicNetwork' // ???
-
 // Webauthn requires a browser.
 const { credentials } = globalThis.navigator
 const { crypto } = globalThis
+const useKnownKeysCache = true // (window.localStorage for known keys)
+const RelayingPartyName = 'Ceramic Network'
 
-type WebauthnCreateOpts = { // TODO: remove this interface
-  // TODO: readup on use
+type WebauthnCreateOpts = {
+  /** Defaults to website host */
   rpname?: PublicKeyCredentialCreationOptions['rp']['name'],
 
   // User facing identifiers (Shown on device/selection screens)
-  // This seems to be the string displayed on windows/chrome (windows-hello credential store)
+  /** username / email */
   name?: PublicKeyCredentialCreationOptions['user']['name'],
-  displayName?: PublicKeyCredentialCreationOptions['user']['displayName'] // shown in system popups
+  /** Human-friendly identifier for credential, usually shown in system popups */
+  displayName?: PublicKeyCredentialCreationOptions['user']['displayName']
 }
 
+/**
+ * Creates a new public key credential for this host/domain.
+ * Useful when no credential key was discovered.
+ */
 export async function createAccount (opts: WebauthnCreateOpts = {}) {
+  // https://developer.mozilla.org/en-US/docs/Web/API/CredentialsContainer/create
   const config: CredentialCreationOptions = {
     publicKey: {
       challenge: randomBytes(32), // Otherwise issued by server
       rp: {
-        id: RelayingPartyID, // Must be set to current hostname
-        name: RelayingPartyName
+        id: globalThis.location.hostname, // Must be set to current hostname
+        name: opts.rpname || RelayingPartyName // A known constant.
       },
       user: {
-        id: randomBytes(32), // Otherwise issued by server
-        name: opts.name || 'ceramicuser',
-        displayName: opts.displayName || 'Ceramic user',
+        id: randomBytes(32), // Server issued arbitrary bytes
+        name: opts.name || 'ceramic', // username or email
+        displayName: opts.displayName || opts.displayName || 'Ceramic', // display name
       },
       pubKeyCredParams: [
-        { type: 'public-key', alg: -7 }, // ECDSA with SHA-256
+        { type: 'public-key', alg: -7 }, // ECDSA (secp256r1) with SHA-256
       ],
       authenticatorSelection: {
-        residentKey: 'required',
-        userVerification: 'required',
-        requireResidentKey: true,
+        requireResidentKey: true, // Deprecated (superseded by `residentKey`), some webauthn v1 impl still use it.
+        residentKey: 'required', // Require private key to be created on authenticator/ secure storage
+
+        userVerification: 'required', // Require user to push button/input pin sign requests
       }
     }
   }
-  const cred = await credentials.create(config) as any
-  if (!cred) throw new Error('AbortedByUser')
-
-  // cred.response.getPublicKey() // Returns binary DER-PK; Only available on Chrome
-  const { publicKey } = decodeAuthenticatorData(cred.response.attestationObject)
+  const credential = await credentials.create(config) as any
+  if (!credential) throw new Error('Empty Credential Response')
+  const authenticatorData = getAuthenticatorData(credential.response)
+  // cred.response.getPublicKey() // Returns binary DER encoded Public key (Only available on Chrome[ium])
+  const { publicKey } = decodeAuthenticatorData(authenticatorData)
+  if (useKnownKeysCache) storePublicKey(publicKey) // save in browser as known key
   return encodeDIDFromPub(publicKey)
 }
 
@@ -164,7 +171,7 @@ export function decodeAttestationObject (attestationObject: Uint8Array|ArrayBuff
  * @param {Uint8Array|ArrayBuffer} attestationObject As given by credentials.create().response.attestationObject
  */
 export function decodeAuthenticatorData (authData: Uint8Array) {
-  if (!(authData instanceof Uint8Array)) throw new Error('Uint8ArrayExpected')
+  authData = assertU8(authData)
   // https://w3c.github.io/webauthn/#sctn-authenticator-data
   if (authData.length < 37) throw new Error('AuthenticatorDataTooShort')
   let o = 0
@@ -206,9 +213,33 @@ export function decodeAuthenticatorData (authData: Uint8Array) {
 }
 
 /**
+ * Normalize authenticatorData across browsers/runtimes
+ * different runtimes implement different parts of spec.
+ */
+function getAuthenticatorData (response: any) {
+  if (response.getAuthenticatorData === 'function') return response.getAuthenticatorData() // only on Chrome
+  if (response.authenticatorData) return response.authenticatorData // Sometimes not available on FF
+  if (response.attestationObject) { // Worst case scenario, decode attestationObject
+    const { authData } = decode(assertU8(response.attestationObject))
+    return assertU8(authData)
+  }
+  throw new Error('Failed to recover authenticator data from credential response') // Give up
+}
+
+/**
+ * Normalize ArrayBuffer|Uint8Array => Uint8Array or throw
+ */
+function assertU8 (o: Uint8Array | ArrayBuffer) : Uint8Array {
+  if (o instanceof ArrayBuffer) return new Uint8Array(o)
+  if (o instanceof Uint8Array) return o
+  throw new Error('Expected Uint8Array')
+}
+
+/**
  * Tiny unsafe CBOR decoder that supports COSE_key numerical keys
  * https://www.iana.org/assignments/cose/cose.xhtml
  * Section 'COSE Key Type Parameters'
+ * TODO: check if iso-webauthn package handles this
  */
 function decodeCBORHack (buf: Uint8Array) {
   if (!(buf instanceof Uint8Array)) throw new Error('Uint8ArrayExpected')
@@ -238,4 +269,57 @@ function decodeCBORHack (buf: Uint8Array) {
     }
   }
   return readItem()
+}
+
+/**
+ * Recovers both recovery bit 0|1 candidates from
+ * an webauthn signature.
+ * @param signature Authenticator generated signature
+ * @param authenticatorData Authenticator Data
+ * @param clientDataJSON Authenticator generated clientDataJSON - watch out for https://goo.gl/yabPex
+ * @returns Recovered set containing pk0 and pk1
+ */
+export function recoverPublicKey (
+  signature: Uint8Array,
+  authenticatorData: Uint8Array,
+  clientDataJSON: Uint8Array
+  // credentialId?: Uint8Array // Yubikey v5 USB-A contains a public key hint.
+) : Array<Uint8Array> {
+  const hash = b => p256.CURVE.hash(b)
+  const msg = u8a.concat([authenticatorData, hash(clientDataJSON)])
+  const msgHash = hash(msg)
+  signature = assertU8(signature) // normalize to u8
+  const ppk0 = p256.Signature.fromDER(signature)
+    .addRecoveryBit(0)
+    .recoverPublicKey(msgHash)
+
+  const ppk1 = p256.Signature.fromDER(signature)
+    .addRecoveryBit(1)
+    .recoverPublicKey(msgHash)
+  return [ppk0, ppk1].map(k => k.toRawBytes(true))
+  /*
+  const ml0 = nOverlap(pk0.slice(1), credentialId)
+  const ml1 = nOverlap(pk1.slice(1), credentialId)
+  const publicKey = ml0 === ml1 ? new Uint8Array(2) : ml1 < ml0 ? pk0 : pk1
+  return publicKey
+  */
+}
+
+export const KNOWN_KEYSTORE = 'knownKeys'
+export function storePublicKey (pk: Uint8Array) {
+  const hex = u8a.toString(pk, 'hex')
+  const knownKeys = JSON.parse(globalThis.localStorage.getItem(KNOWN_KEYSTORE) || '[]')
+  if (!knownKeys.includes(hex)) {
+    knownKeys.push(hex)
+    globalThis.localStorage.setItem(KNOWN_KEYSTORE, JSON.stringify(knownKeys))
+  }
+}
+
+export function selectPublicKey (pk0: Uint8Array, pk1: Uint8Array): Uint8Array|null {
+  const knownKeys = JSON.parse(globalThis.localStorage.getItem(KNOWN_KEYSTORE) || '[]')
+  for (const key of knownKeys) {
+    if (key === u8a.toString(pk0, 'hex')) return pk0
+    if (key === u8a.toString(pk1, 'hex')) return pk1
+  }
+  return null
 }
