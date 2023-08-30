@@ -8,13 +8,20 @@ import { ecPointCompress, encodeDIDFromPub } from '@didtools/key-webcrypto'
 import * as dagCbor from '@ipld/dag-cbor'
 import * as Block from 'multiformats/block'
 import { sha256 as hasher } from 'multiformats/hashes/sha2'
-// Webauthn requires a browser.
+
 const { credentials } = globalThis.navigator
-const { crypto } = globalThis
+const { crypto, localStorage } = globalThis
+
 const useKnownKeysCache = true // (window.localStorage for known keys)
 const RelayingPartyName = 'Ceramic Network'
 
-type WebauthnCreateOpts = {
+export type AdditionalAuthenticatorData = {
+  authData: Uint8Array,
+  clientDataJSON: Uint8Array
+}
+
+
+export interface SimpleCreateCredentialOpts {
   /** Defaults to website host */
   rpname?: PublicKeyCredentialCreationOptions['rp']['name'],
 
@@ -25,13 +32,8 @@ type WebauthnCreateOpts = {
   displayName?: PublicKeyCredentialCreationOptions['user']['displayName']
 }
 
-/**
- * Creates a new public key credential for this host/domain.
- * Useful when no credential key was discovered.
- */
-export async function createAccount (opts: WebauthnCreateOpts = {}) {
-  // https://developer.mozilla.org/en-US/docs/Web/API/CredentialsContainer/create
-  const config: CredentialCreationOptions = {
+export function populateCreateOpts (opts: SimpleCreateCredentialOpts): CredentialCreationOptions {
+  return {
     publicKey: {
       challenge: randomBytes(32), // Otherwise issued by server
       rp: {
@@ -49,12 +51,19 @@ export async function createAccount (opts: WebauthnCreateOpts = {}) {
       authenticatorSelection: {
         requireResidentKey: true, // Deprecated (superseded by `residentKey`), some webauthn v1 impl still use it.
         residentKey: 'required', // Require private key to be created on authenticator/ secure storage
-
         userVerification: 'required', // Require user to push button/input pin sign requests
       }
     }
   }
-  const credential = await credentials.create(config) as any
+}
+
+/**
+ * Creates a new public key credential for this host/domain.
+ * Useful when no credential key was discovered.
+ */
+export async function createAccount (opts: SimpleCreateCredentialOpts = {}) {
+  // https://developer.mozilla.org/en-US/docs/Web/API/CredentialsContainer/create
+  const credential = await credentials.create(populateCreateOpts(opts)) as any
   if (!credential) throw new Error('Empty Credential Response')
   const authenticatorData = getAuthenticatorData(credential.response)
   // cred.response.getPublicKey() // Returns binary DER encoded Public key (Only available on Chrome[ium])
@@ -63,6 +72,9 @@ export async function createAccount (opts: WebauthnCreateOpts = {}) {
   return encodeDIDFromPub(publicKey)
 }
 
+/**
+ * @unfishied / Experimental.
+ */
 export async function createCacaoChallenge () {
     const now = Date.now()
     // Workaround for unknown AAD and discoverable PK;
@@ -79,7 +91,7 @@ export async function createCacaoChallenge () {
         nonce: globalThis.crypto.randomUUID(),
         exp: new Date(now + 7 * 86400000).toISOString(), // 1 week
         nbf: new Date(now).toISOString(),
-        resources: ['uri', 'uri'] // <-- resources we wish to grant permission to.
+        resources: ['uri', 'uri'] // TODO: <-- resources we wish to grant permission to.
       }
     })
 
@@ -136,10 +148,6 @@ async function webauthnSign (hash: Uint8Array, requiredIdentity?: BufferSource) 
   debugger
   return res
 }
-export type AdditionalAuthenticatorData = {
-  authData: Uint8Array,
-  clientDataJSON: Uint8Array
-}
 
 export function webauthnVerify (sig: Uint8Array, publicKey: Uint8Array, aad: AdditionalAuthenticatorData) {
   const { authData, clientDataJSON } = aad
@@ -149,7 +157,7 @@ export function webauthnVerify (sig: Uint8Array, publicKey: Uint8Array, aad: Add
   return p256.verify(sig, hashBase, publicKey)
 }
 
-// --- Helpers
+// --- tools.js
 function randomBytes (n: number) {
   const b = new Uint8Array(n)
   crypto.getRandomValues(b)
@@ -285,18 +293,19 @@ export function recoverPublicKey (
   clientDataJSON: Uint8Array
   // credentialId?: Uint8Array // Yubikey v5 USB-A contains a public key hint.
 ) : Array<Uint8Array> {
-  const hash = b => p256.CURVE.hash(b)
+  const hash = (b: string|Uint8Array) => p256.CURVE.hash(b)
   const msg = u8a.concat([authenticatorData, hash(clientDataJSON)])
   const msgHash = hash(msg)
   signature = assertU8(signature) // normalize to u8
-  const ppk0 = p256.Signature.fromDER(signature)
+  const pk0 = p256.Signature.fromDER(signature)
     .addRecoveryBit(0)
     .recoverPublicKey(msgHash)
-
-  const ppk1 = p256.Signature.fromDER(signature)
+    .toRawBytes(true)
+  const pk1 = p256.Signature.fromDER(signature)
     .addRecoveryBit(1)
     .recoverPublicKey(msgHash)
-  return [ppk0, ppk1].map(k => k.toRawBytes(true))
+    .toRawBytes(true)
+  return [pk0, pk1]
   /*
   const ml0 = nOverlap(pk0.slice(1), credentialId)
   const ml1 = nOverlap(pk1.slice(1), credentialId)
@@ -308,15 +317,15 @@ export function recoverPublicKey (
 export const KNOWN_KEYSTORE = 'knownKeys'
 export function storePublicKey (pk: Uint8Array) {
   const hex = u8a.toString(pk, 'hex')
-  const knownKeys = JSON.parse(globalThis.localStorage.getItem(KNOWN_KEYSTORE) || '[]')
+  const knownKeys = JSON.parse(localStorage.getItem(KNOWN_KEYSTORE) || '[]')
   if (!knownKeys.includes(hex)) {
     knownKeys.push(hex)
-    globalThis.localStorage.setItem(KNOWN_KEYSTORE, JSON.stringify(knownKeys))
+    localStorage.setItem(KNOWN_KEYSTORE, JSON.stringify(knownKeys))
   }
 }
 
 export function selectPublicKey (pk0: Uint8Array, pk1: Uint8Array): Uint8Array|null {
-  const knownKeys = JSON.parse(globalThis.localStorage.getItem(KNOWN_KEYSTORE) || '[]')
+  const knownKeys = JSON.parse(localStorage.getItem(KNOWN_KEYSTORE) || '[]')
   for (const key of knownKeys) {
     if (key === u8a.toString(pk0, 'hex')) return pk0
     if (key === u8a.toString(pk1, 'hex')) return pk1

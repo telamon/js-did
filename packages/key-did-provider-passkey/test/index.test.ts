@@ -1,3 +1,4 @@
+// Lowlevel imports
 import {
   decodeAuthenticatorData,
   createCacaoChallenge,
@@ -6,18 +7,78 @@ import {
   recoverPublicKey,
   storePublicKey,
   selectPublicKey
-} from '../src/index'
+} from '../src/utils'
 import { hexToBytes } from '@noble/curves/abstract/utils'
 import { p256 } from '@noble/curves/p256'
 import * as u8a from 'uint8arrays'
-const toHex = b => u8a.toString(b, 'hex')
 
-describe('Webauthn Cacao Integration', () => {
-  // Skipped for now
+// Highlevel imports
+import { PasskeyProvider } from '../src/index'
+import type { GeneralJWS } from 'dids'
+
+const toHex = (b: Uint8Array) => u8a.toString(b, 'hex')
+// eslint-disable-next-line @typescript-eslint/no-unsafe-return
+const b64urlToObj = (s: string): Record<string, any> => JSON.parse(u8a.toString(u8a.fromString(s, 'base64url')))
+
+// Stub navigator.credentials for nodeJS
+// @ts-ignore
+globalThis.navigator.credentials = {
+  async create (opts) {
+    debugger
+    return {
+
+    }
+  },
+  async get (opts) {
+    debugger
+    return {
+    }
+  }
+}
+
+
+describe('@didtools/key-passkey', () => {
+  let provider: PasskeyProvider
+  let did: string
+
+  beforeAll(async () => {
+    provider = new PasskeyProvider()
+    did = await provider.createCredential('svanjte')
+  })
+
+  it('encodes DID', () => {
+    expect(did).toContain('did:key:zDn')
+  })
+
+  it('authenticates correctly', async () => {
+    const nonce = 'goblin'
+    const aud = 'https://my.app'
+    const paths = ['a', 'b']
+    const resp = await provider.send({
+      jsonrpc: '2.0',
+      id: 0,
+      method: 'did_authenticate',
+      params: { nonce, aud, paths },
+    })
+    const jws = resp?.result as GeneralJWS
+    const payload = b64urlToObj(jws.payload)
+    const header = b64urlToObj(jws.signatures[0].protected)
+    expect(payload.aud).toEqual(aud)
+    expect(payload.nonce).toEqual(nonce)
+    expect(payload.paths).toEqual(paths)
+    expect(payload.did).toEqual(did)
+    expect(payload.exp).toBeGreaterThan(Date.now() / 1000)
+    expect(header.kid).toEqual(expect.stringContaining(did)) // Not gonna work
+    expect(header.alg).toEqual('P256N')
+  })
+
+  // This test was fixtured using the testbench,
+  // leaving usage trail as comments.
   test.skip('Generate and sign Cacao challenge', async () => {
+    debugger
     const [_hash] = await createCacaoChallenge()
-    const hash = '01711220b307b1cfb60c8d1af2ae1ae047de0fe0d2e7fe6ec0f944ec15461075d2dd3f33'
-    console.log('Paste into testbench and sign:\n', Buffer.from(hash).hexSlice())
+    const challenge = hexToBytes('01711220b307b1cfb60c8d1af2ae1ae047de0fe0d2e7fe6ec0f944ec15461075d2dd3f33')
+    console.log('Paste into testbench and sign:\n', toHex(challenge))
     // Response values after manual sign
     const sig = '3044022044f14bc61060910f631a641d4ad0c78fbe52aebbdb0a59fa299a9f0446be6bb9022055ea1743c96c2270521a279a4d7bdb6e8b971fd868e9a92162bbe73411486ab1'
     const authData = '49960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d9763050000000c'
@@ -33,7 +94,7 @@ describe('Webauthn Cacao Integration', () => {
 
 })
 
-describe('Webauthn R&D Sanity Checks', () => {
+describe('@didtools/key-passkey: R&D Sanity Checks', () => {
 
   // Data Extracted from: https://heavy-mint.surge.sh/
   test('Extract public key from AuthenticatorData', () => {
@@ -58,10 +119,10 @@ describe('Webauthn R&D Sanity Checks', () => {
     const { publicKey } = decodeAuthenticatorData(hexToBytes(authData))
 
     // Sign Response
-    const hash = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f' // Input
+    // const hash = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f' // Input
     const authData2 = '49960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d97630500000005'
     const sig = '3044022006b2c838abf114f97e3e57d0d2d0124d1e3f8089d707294bde2fa60c8ae0650002204723780cdd0c405147975aed229e84b7e4d47a8bb8aaa07407b1f842ba16fae1'
-    // TODO: rebuild from object?
+
     const clientDataJSON = '7b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a2241414543417751464267634943516f4c4441304f4478415245684d554652595847426b6147787764486838222c226f726967696e223a22687474703a2f2f6c6f63616c686f73743a38303030222c2263726f73734f726967696e223a66616c73657d'
 
     // expect(Buffer.from(JSON.parse(Buffer.from(hexToBytes(clientDataJSON)).toString()).challenge, 'base64url').hexSlice()).toEqual(hash)
@@ -83,6 +144,7 @@ describe('Webauthn R&D Sanity Checks', () => {
 
     const keys = recoverPublicKey(hexToBytes(sig), hexToBytes(authData2), hexToBytes(clientDataJSON))
     const recoveredKey = selectPublicKey(keys[0], keys[1])
+    if (!recoveredKey) throw new Error('Select Failed')
     expect(toHex(recoveredKey)).toEqual(toHex(publicKey))
   })
 })

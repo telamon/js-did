@@ -16,7 +16,7 @@
     "@didtools/cacao": "workspace:*",
     "@didtools/pkh-ethereum": "workspace:*",
     "@didtools/pkh-tezos": "workspace:*",
-    "@didtools/key-webauthn": "workspace:*",
+    "@didtools/key-passkey": "workspace:*",
     "caip": "^1.1.0",
     "did-session": "workspace:*",
     "nanostores": "^0.9.2",

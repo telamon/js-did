@@ -1,6 +1,6 @@
 {
-  "name": "@didtools/key-webauthn",
-  "version": "0.0.1",
+  "name": "@didtools/key-passkey",
+  "version": "1.0.0",
   "author": "Tony Ivanov",
   "license": "(Apache-2.0 OR MIT)",
   "type": "module",
@@ -38,23 +38,28 @@
     "DID",
     "identity",
     "did-provider",
-    "self-sovereign"
+    "self-sovereign",
+    "passkey",
+    "webauthn"
   ],
   "bugs": {
     "url": "https://github.com/ceramicnetwork/js-did/issues"
   },
   "homepage": "https://github.com/ceramicnetwork/js-did#readme",
   "devDependencies": {
+    "dids": "workspace:^4.0.1",
+    "did-jwt": "^7.2.0",
     "typescript": "^5.0.4"
   },
   "dependencies": {
     "@didtools/cacao": "workspace:^2.1.0",
-    "@didtools/key-webcrypto": "workspace:*",
+    "@didtools/key-webcrypto": "workspace:^0.1.1",
     "@ipld/dag-cbor": "^9.0.1",
     "multiformats": "^11.0.2",
     "cborg": "^1.10.2",
     "caip": "^1.1.0",
     "uint8arrays": "^4.0.3",
-    "@noble/curves": "^1.1.0"
+    "@noble/curves": "^1.1.0",
+    "rpc-utils": "^0.6.2"
   }
 }
