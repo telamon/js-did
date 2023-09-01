@@ -1,49 +1,45 @@
-// Lowlevel imports
+// Low-level imports
 import {
   decodeAuthenticatorData,
   createCacaoChallenge,
   decodeAttestationObject,
-  webauthnVerify,
+  verify,
   recoverPublicKey,
   storePublicKey,
-  selectPublicKey
+  selectPublicKey,
+  b64urlToObj
 } from '../src/utils'
+import { MockAuthenticator } from './mock-authenticator'
 import { hexToBytes } from '@noble/curves/abstract/utils'
 import { p256 } from '@noble/curves/p256'
 import * as u8a from 'uint8arrays'
 
-// Highlevel imports
+// High-level imports
 import { PasskeyProvider } from '../src/index'
 import type { GeneralJWS } from 'dids'
 
 const toHex = (b: Uint8Array) => u8a.toString(b, 'hex')
-// eslint-disable-next-line @typescript-eslint/no-unsafe-return
-const b64urlToObj = (s: string): Record<string, any> => JSON.parse(u8a.toString(u8a.fromString(s, 'base64url')))
 
 // Stub navigator.credentials for nodeJS
 // @ts-ignore
-globalThis.navigator.credentials = {
-  async create (opts) {
-    debugger
-    return {
-
-    }
-  },
-  async get (opts) {
-    debugger
-    return {
-    }
-  }
-}
-
+globalThis.navigator.credentials = new MockAuthenticator()
 
 describe('@didtools/key-passkey', () => {
   let provider: PasskeyProvider
   let did: string
+  let pk: Uint8Array
 
   beforeAll(async () => {
     provider = new PasskeyProvider()
-    did = await provider.createCredential('svanjte')
+    const res = await provider.createCredential({ name: 'rob' })
+    did = res.did
+    pk = res.publicKey
+  })
+
+  it('decodes public key', () => {
+    // @ts-ignore
+    const authenticator = globalThis.navigator.credentials as MockAuthenticator
+    expect(u8a.toString(pk, 'hex')).toEqual(u8a.toString(authenticator.credentials[0].pk, 'hex'))
   })
 
   it('encodes DID', () => {
@@ -61,6 +57,7 @@ describe('@didtools/key-passkey', () => {
       params: { nonce, aud, paths },
     })
     const jws = resp?.result as GeneralJWS
+    debugger
     const payload = b64urlToObj(jws.payload)
     const header = b64urlToObj(jws.signatures[0].protected)
     expect(payload.aud).toEqual(aud)
@@ -85,7 +82,7 @@ describe('@didtools/key-passkey', () => {
     const clientDataJSON = '7b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a2241584553494c4d4873632d32444930613871346134456665442d4453355f357577506c4537425647454858533354387a222c226f726967696e223a22687474703a2f2f6c6f63616c686f73743a38303830222c2263726f73734f726967696e223a66616c73657d'
     const userHandle = '7b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a2241584553494c4d4873632d32444930613871346134456665442d4453355f357577506c4537425647454858533354387a222c226f726967696e223a22687474703a2f2f6c6f63616c686f73743a38303830222c2263726f73734f726967696e223a66616c73657d'
 
-    const valid = webauthnVerify(hexToBytes(sig), hexToBytes(userHandle), {
+    const valid = verify(hexToBytes(sig), hexToBytes(userHandle), {
       authData: hexToBytes(authData),
       clientDataJSON: hexToBytes(clientDataJSON)
     })
@@ -148,3 +145,4 @@ describe('@didtools/key-passkey: R&D Sanity Checks', () => {
     expect(toHex(recoveredKey)).toEqual(toHex(publicKey))
   })
 })
+

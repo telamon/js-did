@@ -61,15 +61,45 @@ export function populateCreateOpts (opts: SimpleCreateCredentialOpts): Credentia
  * Creates a new public key credential for this host/domain.
  * Useful when no credential key was discovered.
  */
-export async function createAccount (opts: SimpleCreateCredentialOpts = {}) {
+export async function createCredential (opts: SimpleCreateCredentialOpts = {}) {
   // https://developer.mozilla.org/en-US/docs/Web/API/CredentialsContainer/create
   const credential = await credentials.create(populateCreateOpts(opts)) as any
   if (!credential) throw new Error('Empty Credential Response')
+
   const authenticatorData = getAuthenticatorData(credential.response)
-  // cred.response.getPublicKey() // Returns binary DER encoded Public key (Only available on Chrome[ium])
+
   const { publicKey } = decodeAuthenticatorData(authenticatorData)
+
   if (useKnownKeysCache) storePublicKey(publicKey) // save in browser as known key
+
   return encodeDIDFromPub(publicKey)
+}
+
+export async function authenticatorSign (challenge: Uint8Array, credentialId?: Uint8Array|string) {
+    const allowCredentials:PublicKeyCredentialDescriptor[] = []
+    if (credentialId) {
+      if (typeof credentialId === 'string') credentialId = u8a.fromString(credentialId, 'base64url')
+      allowCredentials.push({ type: 'public-key', id: credentialId })
+    }
+    const credential = await navigator.credentials.get({
+      publicKey: {
+        rpId: globalThis.location.hostname,
+        challenge,
+        allowCredentials,
+        timeout: 240000,
+        // @ts-ignore
+        attestation: 'direct' // https://developer.mozilla.org/en-US/docs/Web/API/CredentialsContainer/get#publickey_object_structure
+      }
+    })
+    debugger
+    const { clientDataJSON, signature } = credential.response
+    const authenticatorData = getAuthenticatorData(credential.response)
+    const recovered = recoverPublicKey(
+      signature,
+      authenticatorData,
+      clientDataJSON
+    )
+    return { signature, recovered, credential }
 }
 
 /**
@@ -129,27 +159,7 @@ export async function createCacaoChallenge () {
     return [block.cid.bytes, toCacao]
 }
 
-async function webauthnSign (hash: Uint8Array, requiredIdentity?: BufferSource) {
-  const allowCredentials = []
-  if (requiredIdentity) { // non-discoverable mode
-    allowCredentials.push({ type: "public-key", id: requiredIdentity })
-  }
-  const res = await globalThis.navigator.credentials.get({
-    publicKey: {
-      rpId: RelayingPartyID,
-      challenge: hash,
-      allowCredentials,
-      timeout: 240000,
-    },
-  })
-
-  res.response.authenticatorData
-  res.response.signature
-  debugger
-  return res
-}
-
-export function webauthnVerify (sig: Uint8Array, publicKey: Uint8Array, aad: AdditionalAuthenticatorData) {
+export function verify (sig: Uint8Array, publicKey: Uint8Array, aad: AdditionalAuthenticatorData) {
   const { authData, clientDataJSON } = aad
   const clientDataHash = p256.CURVE.hash(clientDataJSON)
   const msg = u8a.concat([authData, clientDataHash])
@@ -224,7 +234,7 @@ export function decodeAuthenticatorData (authData: Uint8Array) {
  * Normalize authenticatorData across browsers/runtimes
  * different runtimes implement different parts of spec.
  */
-function getAuthenticatorData (response: any) {
+export function getAuthenticatorData (response: any) {
   if (response.getAuthenticatorData === 'function') return response.getAuthenticatorData() // only on Chrome
   if (response.authenticatorData) return response.authenticatorData // Sometimes not available on FF
   if (response.attestationObject) { // Worst case scenario, decode attestationObject
@@ -331,4 +341,12 @@ export function selectPublicKey (pk0: Uint8Array, pk1: Uint8Array): Uint8Array|n
     if (key === u8a.toString(pk1, 'hex')) return pk1
   }
   return null
+}
+
+export const b64urlToObj = (s: string): Record<string, any> => // Borrowed from @didtools/webcrypto
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  JSON.parse(u8a.toString(u8a.fromString(s, 'base64url')))
+
+export function jsonToBase64Url(obj: any): string {
+  return u8a.toString(u8a.fromString(JSON.stringify(obj)), 'base64url')
 }
