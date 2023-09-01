@@ -81,7 +81,7 @@ export async function authenticatorSign (challenge: Uint8Array, credentialId?: U
       if (typeof credentialId === 'string') credentialId = u8a.fromString(credentialId, 'base64url')
       allowCredentials.push({ type: 'public-key', id: credentialId })
     }
-    const credential = await navigator.credentials.get({
+    const credential = await globalThis.navigator.credentials.get({
       publicKey: {
         rpId: globalThis.location.hostname,
         challenge,
@@ -91,7 +91,7 @@ export async function authenticatorSign (challenge: Uint8Array, credentialId?: U
         attestation: 'direct' // https://developer.mozilla.org/en-US/docs/Web/API/CredentialsContainer/get#publickey_object_structure
       }
     })
-    debugger
+    debugger // TODO: verify why TS claims credential.response dosen't exist.
     const { clientDataJSON, signature } = credential.response
     const authenticatorData = getAuthenticatorData(credential.response)
     const recovered = recoverPublicKey(
@@ -159,12 +159,13 @@ export async function createCacaoChallenge () {
     return [block.cid.bytes, toCacao]
 }
 
-export function verify (sig: Uint8Array, publicKey: Uint8Array, aad: AdditionalAuthenticatorData) {
+// TODO: verifyCacao(object)
+export function verify (signature: Uint8Array, publicKey: Uint8Array, aad: AdditionalAuthenticatorData) {
   const { authData, clientDataJSON } = aad
   const clientDataHash = p256.CURVE.hash(clientDataJSON)
   const msg = u8a.concat([authData, clientDataHash])
   const hashBase = p256.CURVE.hash(msg)
-  return p256.verify(sig, hashBase, publicKey)
+  return p256.verify(signature, hashBase, publicKey)
 }
 
 // --- tools.js
@@ -295,7 +296,7 @@ function decodeCBORHack (buf: Uint8Array) {
  * @param signature Authenticator generated signature
  * @param authenticatorData Authenticator Data
  * @param clientDataJSON Authenticator generated clientDataJSON - watch out for https://goo.gl/yabPex
- * @returns Recovered set containing pk0 and pk1
+ * @returns Recovered tuple of pk0 and pk1
  */
 export function recoverPublicKey (
   signature: Uint8Array,
@@ -307,21 +308,12 @@ export function recoverPublicKey (
   const msg = u8a.concat([authenticatorData, hash(clientDataJSON)])
   const msgHash = hash(msg)
   signature = assertU8(signature) // normalize to u8
-  const pk0 = p256.Signature.fromDER(signature)
-    .addRecoveryBit(0)
+  const keys = [0, 1].map(rBit => p256.Signature.fromDER(signature)
+    .addRecoveryBit(rBit)
     .recoverPublicKey(msgHash)
     .toRawBytes(true)
-  const pk1 = p256.Signature.fromDER(signature)
-    .addRecoveryBit(1)
-    .recoverPublicKey(msgHash)
-    .toRawBytes(true)
-  return [pk0, pk1]
-  /*
-  const ml0 = nOverlap(pk0.slice(1), credentialId)
-  const ml1 = nOverlap(pk1.slice(1), credentialId)
-  const publicKey = ml0 === ml1 ? new Uint8Array(2) : ml1 < ml0 ? pk0 : pk1
-  return publicKey
-  */
+  )
+  return keys
 }
 
 export const KNOWN_KEYSTORE = 'knownKeys'
