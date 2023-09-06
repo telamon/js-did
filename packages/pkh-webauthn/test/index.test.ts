@@ -1,13 +1,12 @@
 // Low-level imports
 import {
   decodeAuthenticatorData,
-  createCacaoChallenge,
   decodeAttestationObject,
   verify,
   recoverPublicKey,
   storePublicKey,
   selectPublicKey,
-  b64urlToObj
+  createCredential
 } from '../src/utils'
 import { MockAuthenticator } from './mock-authenticator'
 import { hexToBytes } from '@noble/curves/abstract/utils'
@@ -15,8 +14,10 @@ import { p256 } from '@noble/curves/p256'
 import * as u8a from 'uint8arrays'
 
 // High-level imports
-import { PasskeyProvider } from '../src/index'
-import type { GeneralJWS } from 'dids'
+import { DIDSession } from 'did-session'
+import { WebauthnAuth } from '../src/index'
+import { Cacao } from '@didtools/cacao'
+import { encodeDIDFromPub } from '@didtools/key-webcrypto'
 
 const toHex = (b: Uint8Array) => u8a.toString(b, 'hex')
 
@@ -25,70 +26,37 @@ const toHex = (b: Uint8Array) => u8a.toString(b, 'hex')
 globalThis.navigator.credentials = new MockAuthenticator()
 
 describe('@didtools/key-passkey', () => {
-  let provider: PasskeyProvider
-  let did: string
+  const wSession: WebauthnAuth.AuthenticatorSession = WebauthnAuth.createSession()
   let pk: Uint8Array
 
   beforeAll(async () => {
-    provider = new PasskeyProvider()
-    const res = await provider.createCredential({ name: 'rob' })
-    did = res.did
+    const res = await WebauthnAuth.createCredential(wSession, { name: 'rob' })
     pk = res.publicKey
   })
 
   it('decodes public key', () => {
     // @ts-ignore
     const authenticator = globalThis.navigator.credentials as MockAuthenticator
+    // @ts-ignore
     expect(u8a.toString(pk, 'hex')).toEqual(u8a.toString(authenticator.credentials[0].pk, 'hex'))
   })
 
-  it('encodes DID', () => {
-    expect(did).toContain('did:key:zDn')
+  it('authenticates and verifies', async () => {
+    const authMethod = await WebauthnAuth.getAuthMethod(wSession)
+    const session = await DIDSession.authorize(authMethod, { resources: ['ceramic://nil'] })
+    const { cacao } = session
+    const { p, s } = cacao
+    expect(p.iss).toEqual(encodeDIDFromPub(pk))
+    expect(s.t).toEqual('webauthn:p256')
+    // TODO: Should we leave buffers as Uint8Array to save space?
+    expect(typeof s.s).toEqual('string')
+    expect(typeof s.aad?.authData).toEqual('string')
+    expect(typeof s.aad?.clientDataJSON).toEqual('string')
+    const did = session.did
+    const jws = await did.createJWS({ hello: 'world' })
+    const verifiers = { ...WebauthnAuth.getVerifier() }
+    await Cacao.verify(session.cacao, { verifiers })
   })
-
-  it('authenticates correctly', async () => {
-    const nonce = 'goblin'
-    const aud = 'https://my.app'
-    const paths = ['a', 'b']
-    const resp = await provider.send({
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'did_authenticate',
-      params: { nonce, aud, paths },
-    })
-    const jws = resp?.result as GeneralJWS
-    debugger
-    const payload = b64urlToObj(jws.payload)
-    const header = b64urlToObj(jws.signatures[0].protected)
-    expect(payload.aud).toEqual(aud)
-    expect(payload.nonce).toEqual(nonce)
-    expect(payload.paths).toEqual(paths)
-    expect(payload.did).toEqual(did)
-    expect(payload.exp).toBeGreaterThan(Date.now() / 1000)
-    expect(header.kid).toEqual(expect.stringContaining(did)) // Not gonna work
-    expect(header.alg).toEqual('P256N')
-  })
-
-  // This test was fixtured using the testbench,
-  // leaving usage trail as comments.
-  test.skip('Generate and sign Cacao challenge', async () => {
-    debugger
-    const [_hash] = await createCacaoChallenge()
-    const challenge = hexToBytes('01711220b307b1cfb60c8d1af2ae1ae047de0fe0d2e7fe6ec0f944ec15461075d2dd3f33')
-    console.log('Paste into testbench and sign:\n', toHex(challenge))
-    // Response values after manual sign
-    const sig = '3044022044f14bc61060910f631a641d4ad0c78fbe52aebbdb0a59fa299a9f0446be6bb9022055ea1743c96c2270521a279a4d7bdb6e8b971fd868e9a92162bbe73411486ab1'
-    const authData = '49960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d9763050000000c'
-    const clientDataJSON = '7b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a2241584553494c4d4873632d32444930613871346134456665442d4453355f357577506c4537425647454858533354387a222c226f726967696e223a22687474703a2f2f6c6f63616c686f73743a38303830222c2263726f73734f726967696e223a66616c73657d'
-    const userHandle = '7b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a2241584553494c4d4873632d32444930613871346134456665442d4453355f357577506c4537425647454858533354387a222c226f726967696e223a22687474703a2f2f6c6f63616c686f73743a38303830222c2263726f73734f726967696e223a66616c73657d'
-
-    const valid = verify(hexToBytes(sig), hexToBytes(userHandle), {
-      authData: hexToBytes(authData),
-      clientDataJSON: hexToBytes(clientDataJSON)
-    })
-    expect(valid).toEqual(true)
-  })
-
 })
 
 describe('@didtools/key-passkey: R&D Sanity Checks', () => {

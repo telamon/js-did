@@ -8,18 +8,18 @@ import { encode } from 'cborg'
  * Produces structurally correct and verifiale credentials/signatures for unit tests.
  */
 export class MockAuthenticator {
-  credentials = []
+  credentials: any[] = []
 
   async create (opts: CredentialCreationOptions) {
     const secret = p256.utils.randomPrivateKey()
     const pk = p256.getPublicKey(secret)
     const rawId = u8a.concat([pk.slice(1, 14), u8a.fromString('STUB', 'utf8')])
     const id = u8a.toString(rawId, 'base64url')
-    const userHandle = hash(opts.publicKey.user.id)
+    const userHandle = hash(opts.publicKey?.user?.id || p256.CURVE.randomBytes(32))
     this.credentials.push({ secret, pk, id, rawId, userHandle }) // save for later
     const authData = mkAuthData(pk)
     const attestationObject = bufToU8(encode({ fmt: 'none', attStmt: {}, authData }))
-    const challenge = u8a.toString(opts.publicKey.challenge as Uint8Array, 'base64url')
+    const challenge = u8a.toString(opts.publicKey?.challenge as Uint8Array, 'base64url')
     const rawCDJ = {
       type: 'webauthn.create',
       origin: opts.publicKey?.rp?.id,
@@ -59,13 +59,14 @@ export class MockAuthenticator {
     const clientDataJSON = u8a.fromString(JSON.stringify(rawCDJ))
     // This authenticatorData dosen't matter really but don't try to decode it.
     const authenticatorData = u8a.fromString('f689f6b7489197aacf01172f02a82e0715f72aff70d5f758b9b0f7d3999978d20500000004')
-    const signature = hash(u8a.concat([authenticatorData, hash(clientDataJSON)]))
+    const msgHash = hash(u8a.concat([authenticatorData, hash(clientDataJSON)]))
+    const signature = p256.sign(msgHash, secret).toDERRawBytes()
     const out: PublicKeyCredential = {
       authenticatorAttachment: 'cross-platform',
       id,
       rawId,
       response: {
-        authenticatorData: authenticatorData.buffer,
+        authenticatorData,
         clientDataJSON,
         signature,
         userHandle

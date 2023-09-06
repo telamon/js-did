@@ -1,25 +1,13 @@
-import { Cacao, CacaoBlock } from '@didtools/cacao'
 import { decode } from 'cborg'
 import { p256 } from '@noble/curves/p256'
 import * as u8a from 'uint8arrays'
 import { ecPointCompress, encodeDIDFromPub } from '@didtools/key-webcrypto'
 
-// Hashing workaround
-import * as dagCbor from '@ipld/dag-cbor'
-import * as Block from 'multiformats/block'
-import { sha256 as hasher } from 'multiformats/hashes/sha2'
-
 const { credentials } = globalThis.navigator
 const { crypto, localStorage } = globalThis
 
-const useKnownKeysCache = true // (window.localStorage for known keys)
+const useKnownKeysCache = true // TODO: remove and repair tests
 const RelayingPartyName = 'Ceramic Network'
-
-export type AdditionalAuthenticatorData = {
-  authData: Uint8Array,
-  clientDataJSON: Uint8Array
-}
-
 
 export interface SimpleCreateCredentialOpts {
   /** Defaults to website host */
@@ -64,10 +52,9 @@ export function populateCreateOpts (opts: SimpleCreateCredentialOpts): Credentia
 export async function createCredential (opts: SimpleCreateCredentialOpts = {}) {
   // https://developer.mozilla.org/en-US/docs/Web/API/CredentialsContainer/create
   const credential = await credentials.create(populateCreateOpts(opts)) as any
-  if (!credential) throw new Error('Empty Credential Response')
+  if (!credential) throw new Error('AbortedByUser')
 
   const authenticatorData = getAuthenticatorData(credential.response)
-
   const { publicKey } = decodeAuthenticatorData(authenticatorData)
 
   if (useKnownKeysCache) storePublicKey(publicKey) // save in browser as known key
@@ -75,7 +62,11 @@ export async function createCredential (opts: SimpleCreateCredentialOpts = {}) {
   return encodeDIDFromPub(publicKey)
 }
 
-export async function authenticatorSign (challenge: Uint8Array, credentialId?: Uint8Array|string) {
+export async function authenticatorSign (challenge: Uint8Array, credentialId?: Uint8Array|string): Promise<{
+  signature: Uint8Array,
+  recovered: [Uint8Array, Uint8Array],
+  credential: Credential
+}> {
     const allowCredentials:PublicKeyCredentialDescriptor[] = []
     if (credentialId) {
       if (typeof credentialId === 'string') credentialId = u8a.fromString(credentialId, 'base64url')
@@ -91,9 +82,11 @@ export async function authenticatorSign (challenge: Uint8Array, credentialId?: U
         attestation: 'direct' // https://developer.mozilla.org/en-US/docs/Web/API/CredentialsContainer/get#publickey_object_structure
       }
     })
-    debugger // TODO: verify why TS claims credential.response dosen't exist.
-    const { clientDataJSON, signature } = credential.response
-    const authenticatorData = getAuthenticatorData(credential.response)
+    if (!credential) throw new Error('AbortedByUser')
+    // @ts-ignore - credential.response does exist.
+    const { response } = credential
+    const { clientDataJSON, signature } = response
+    const authenticatorData = getAuthenticatorData(response)
     const recovered = recoverPublicKey(
       signature,
       authenticatorData,
@@ -102,66 +95,12 @@ export async function authenticatorSign (challenge: Uint8Array, credentialId?: U
     return { signature, recovered, credential }
 }
 
-/**
- * @unfishied / Experimental.
- */
-export async function createCacaoChallenge () {
-    const now = Date.now()
-    // Workaround for unknown AAD and discoverable PK;
-    // we create a "challenge" CacaoBlock without Issuer attribute
-    const challenge: Cacao = Object.freeze({
-      h: {
-        t: 'caip122'
-      },
-      p: {
-        domain: globalThis.location.hostname,
-        iat: new Date(now).toISOString(),
-        aud: '' + globalThis.location,
-        version: 1,
-        nonce: globalThis.crypto.randomUUID(),
-        exp: new Date(now + 7 * 86400000).toISOString(), // 1 week
-        nbf: new Date(now).toISOString(),
-        resources: ['uri', 'uri'] // TODO: <-- resources we wish to grant permission to.
-      }
-    })
-
-    // Workaround for https://github.com/multiformats/js-multiformats/issues/259
-    const fromCacao = (cacao: Cacao): Promise<CacaoBlock> => {
-      return Block.encode<Cacao, number, number>({
-        value: cacao,
-        codec: dagCbor,
-        hasher: {
-          ...hasher,
-          digest (bytes: any) {
-            if (!(bytes instanceof Uint8Array) && bytes?.buffer) bytes = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-            return hasher.digest(bytes)
-          }
-        }
-      })
-    }
-    const block = await fromCacao(challenge) // await CacaoBlock.fromCacao(challenge)
-
-    // Webauthn Sign
-    // const signResponse = await webauthnSign(block.cid.bytes)
-
-    // Extend CacaoMessage with Authenticator values
-    const toCacao = (did: string, sig: Uint8Array, authenticatorData: Uint8Array):Cacao => ({
-      p: {
-        ...challenge.p,
-        iss: did
-      },
-      s: {
-        t: 'webauthn:es256',
-        s: sig,
-        aad: authenticatorData
-      }
-    })
-    return [block.cid.bytes, toCacao]
-}
-
-// TODO: verifyCacao(object)
-export function verify (signature: Uint8Array, publicKey: Uint8Array, aad: AdditionalAuthenticatorData) {
-  const { authData, clientDataJSON } = aad
+export function verify (
+  signature: Uint8Array,
+  publicKey: Uint8Array,
+  authData: Uint8Array,
+  clientDataJSON: Uint8Array
+) {
   const clientDataHash = p256.CURVE.hash(clientDataJSON)
   const msg = u8a.concat([authData, clientDataHash])
   const hashBase = p256.CURVE.hash(msg)
@@ -303,17 +242,16 @@ export function recoverPublicKey (
   authenticatorData: Uint8Array,
   clientDataJSON: Uint8Array
   // credentialId?: Uint8Array // Yubikey v5 USB-A contains a public key hint.
-) : Array<Uint8Array> {
+) : [Uint8Array, Uint8Array] {
   const hash = (b: string|Uint8Array) => p256.CURVE.hash(b)
   const msg = u8a.concat([authenticatorData, hash(clientDataJSON)])
   const msgHash = hash(msg)
   signature = assertU8(signature) // normalize to u8
-  const keys = [0, 1].map(rBit => p256.Signature.fromDER(signature)
+  return [0, 1].map(rBit => p256.Signature.fromDER(signature)
     .addRecoveryBit(rBit)
     .recoverPublicKey(msgHash)
     .toRawBytes(true)
-  )
-  return keys
+  ) as [Uint8Array, Uint8Array]
 }
 
 export const KNOWN_KEYSTORE = 'knownKeys'
@@ -333,12 +271,4 @@ export function selectPublicKey (pk0: Uint8Array, pk1: Uint8Array): Uint8Array|n
     if (key === u8a.toString(pk1, 'hex')) return pk1
   }
   return null
-}
-
-export const b64urlToObj = (s: string): Record<string, any> => // Borrowed from @didtools/webcrypto
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-  JSON.parse(u8a.toString(u8a.fromString(s, 'base64url')))
-
-export function jsonToBase64Url(obj: any): string {
-  return u8a.toString(u8a.fromString(JSON.stringify(obj)), 'base64url')
 }
